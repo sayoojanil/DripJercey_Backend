@@ -303,7 +303,6 @@ app.get("/orders", authMiddleware, async (req, res) => {
         return {
           orderId: order._id,
           userId: user._id,
-          // userName: user.name,
           email: user.email,
           total: order.total,
           date: order.date,
@@ -354,6 +353,24 @@ app.get("/health", (req, res) => {
     status: "ok",
     mongo: mongoose.connection.readyState === 1 ? "connected" : "down",
   });
+});
+
+// ------------------ HOME PAGE ------------------ //
+
+app.get("/", (req, res) => {
+  res.send(`
+    <div style="font-family: Arial; padding: 40px; text-align: center;">
+      <h1>🚀 Server is Running Successfully</h1>
+      <p>Status: <strong style="color: green;">Active</strong></p>
+      <p>MongoDB: ${
+        mongoose.connection.readyState === 1
+          ? "<span style='color: green;'>Connected</span>"
+          : "<span style='color: red;'>Disconnected</span>"
+      }</p>
+      <hr />
+      <p>API Base URL: <strong>http://localhost:5000</strong></p>
+    </div>
+  `);
 });
 
 // ------------------ SERVER ------------------ //
