@@ -2,17 +2,17 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import path from "path";
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-const JWT_SECRET = "your_secret_key";
-
+const JWT_SECRET = process.env.JWT_SECRET || "local_dev_secret";
 const MONGO_URI =
   process.env.MONGO_URI ||
   "mongodb+srv://Payingguest:alankarvp100@cluster0.tfrej4l.mongodb.net/Payingguest?retryWrites=true&w=majority";
+const PORT = process.env.PORT || 5000;
+const runningOnVercel = process.env.VERCEL === "1";
 
 // ------------------ SCHEMAS ------------------ //
 
@@ -80,13 +80,30 @@ const Product = mongoose.model("Product", productSchema);
 
 // ------------------ CONNECT MDB ------------------ //
 
+let cachedConnection = null;
+let cachedPromise = null;
+
 async function connectDB() {
+  if (cachedConnection) return cachedConnection;
+
+  if (!cachedPromise) {
+    cachedPromise = mongoose.connect(MONGO_URI).then((mongooseInstance) => {
+      console.log("MongoDB connected");
+      cachedConnection = mongooseInstance.connection;
+      return cachedConnection;
+    });
+  }
+
   try {
-    await mongoose.connect(MONGO_URI);
-    console.log("MongoDB connected");
+    return await cachedPromise;
   } catch (err) {
     console.error("MongoDB error:", err);
-    process.exit(1);
+    cachedPromise = null;
+    cachedConnection = null;
+    if (!runningOnVercel) {
+      process.exit(1);
+    }
+    throw err;
   }
 }
 connectDB();
@@ -375,7 +392,10 @@ app.get("/", (req, res) => {
 
 // ------------------ SERVER ------------------ //
 
-const PORT = 5000;
-app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+if (!runningOnVercel) {
+  app.listen(PORT, () =>
+    console.log(`Server running on http://localhost:${PORT}`)
+  );
+}
+
+export default app;
