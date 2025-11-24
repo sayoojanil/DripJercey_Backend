@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Dripco Backend - Server Status</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;padding:20px}
+    .status{padding:10px;background:#f0f8ff;border:1px solid #cce;display:inline-block;margin-bottom:10px}
+    ul{list-style:none;padding:0}
+    li{padding:6px 0;border-bottom:1px solid #eee}
+  </style>
+</head>
+<body>
+  <h1>Dripco Backend</h1>
+  <div class="status" id="status">Checking server...</div>
+
+  <h2>Products</h2>
+  <div id="products">Loading products...</div>
+
+  <script>
+    async function init() {
+      try {
+        const health = await fetch('/health').then(r=>r.json());
+        document.getElementById('status').textContent = `Server: ${health.message} (Mongo: ${health.mongo})`;
+      } catch (e) {
+        document.getElementById('status').textContent = 'Server unreachable';
+      }
+
+      try {
+        const products = await fetch('/products').then(r=>r.json());
+        const container = document.getElementById('products');
+        if (!products || products.length === 0) {
+          container.textContent = 'No products found';
+          return;
+        }
+        const ul = document.createElement('ul');
+        products.forEach(p => {
+          const li = document.createElement('li');
+          li.textContent = `${p.name} — ${p.category} — ₹${p.price}`;
+          ul.appendChild(li);
+        });
+        container.innerHTML = '';
+        container.appendChild(ul);
+      } catch (e) {
+        document.getElementById('products').textContent = 'Failed to load products';
+      }
+    }
+    init();
+  </script>
+</body>
+</html>
