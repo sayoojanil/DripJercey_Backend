@@ -290,7 +290,7 @@ app.delete("/wishlist/:productId", authMiddleware, async (req, res) => {
   res.json({ message: "Removed" });
 });
 
-// ------------------ ORDERS ------------------ //
+// ------------------ ORDERS (USER) ------------------ //
 
 app.get("/orders", authMiddleware, async (req, res) => {
   try {
@@ -347,6 +347,58 @@ app.post("/orders", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Order failed" });
   }
 });
+
+// ------------------ ADMIN ORDERS (NEW) ------------------ //
+
+// get all orders for admin
+app.get("/admin/orders", async (req, res) => {
+  try {
+    const orders = await Order.find({});
+
+    const detailedOrders = await Promise.all(
+      orders.map(async (order) => {
+        const user = await User.findById(order.userId).select("name email");
+        const profile = await Profile.findOne({ userId: order.userId })
+          .select("name email phone address");
+
+        const detailedItems = await Promise.all(
+          order.items.map(async (item) => {
+            const product = item.productId
+              ? await Product.findById(item.productId).select(
+                  "name price category imageUrl"
+                )
+              : null;
+
+            return {
+              ...item,
+              productName: product?.name || "Unknown Product",
+              productPrice: product?.price || 0,
+              category: product?.category || "Unknown",
+              imageUrl: product?.imageUrl || "",
+            };
+          })
+        );
+
+        return {
+          orderId: order._id,
+          name: profile?.name || user?.name || "Unknown",
+          email: profile?.email || user?.email || "Unknown",
+          phone: profile?.phone || "Not Provided",
+          address: profile?.address || "Not Provided",
+          total: order.total,
+          date: order.date,
+          items: detailedItems,
+        };
+      })
+    );
+
+    res.json(detailedOrders);
+  } catch (err) {
+    console.error("ADMIN ORDER ERROR:", err);
+    res.status(500).json({ message: "Failed to fetch admin orders" });
+  }
+});
+
 
 // ------------------ PROFILE ------------------ //
 
