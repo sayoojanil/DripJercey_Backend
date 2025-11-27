@@ -68,6 +68,7 @@ const Order = mongoose.model("Order", orderSchema);
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+     description: { type: String, required: true },
     category: { type: String, required: true },
     price: { type: Number, required: true },
     imageUrl: { type: String, required: true },
@@ -183,8 +184,14 @@ app.post("/loginWithEmail", async (req, res) => {
 
 app.get("/auth/me", authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    res.json(user);
+    const user = await User.findById(req.user.id).select("name email");
+    const profile = await Profile.findOne({ userId: req.user.id });
+
+    res.json({
+      ...user.toObject(),
+      phone: profile?.phone || "",
+      address: profile?.address || ""
+    });
   } catch {
     res.status(500).json({ message: "Failed to fetch user" });
   }
@@ -295,32 +302,29 @@ app.delete("/wishlist/:productId", authMiddleware, async (req, res) => {
 app.get("/orders", authMiddleware, async (req, res) => {
   try {
     const orders = await Order.find({ userId: req.user.id });
-    const user = await User.findById(req.user.id).select("name email");
+    const profile = await Profile.findOne({ userId: req.user.id })
+      .select("name email phone address");
 
     const detailedOrders = await Promise.all(
       orders.map(async (order) => {
         const detailedItems = await Promise.all(
           order.items.map(async (item) => {
-            const product = item.productId
-              ? await Product.findById(item.productId).select(
-                  "name price category imageUrl"
-                )
-              : null;
-
+            const product = await Product.findById(item.productId);
             return {
               ...item,
-              productName: product?.name || "Unknown Product",
+              productName: product?.name || "",
               productPrice: product?.price || 0,
-              category: product?.category || "Unknown",
               imageUrl: product?.imageUrl || "",
+              category: product?.category || ""
             };
           })
         );
 
         return {
           orderId: order._id,
-          userId: user._id,
-          email: user.email,
+          email: profile.email,
+          phone: profile.phone,
+          address: profile.address,
           total: order.total,
           date: order.date,
           items: detailedItems,
@@ -330,10 +334,10 @@ app.get("/orders", authMiddleware, async (req, res) => {
 
     res.json(detailedOrders);
   } catch (err) {
-    console.error("Order fetch error:", err);
     res.status(500).json({ message: "Failed to fetch orders" });
   }
 });
+
 
 app.post("/orders", authMiddleware, async (req, res) => {
   try {
