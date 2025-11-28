@@ -14,7 +14,7 @@ const MONGO_URI =
 const PORT = process.env.PORT || 5000;
 const runningOnVercel = process.env.VERCEL === "1";
 
-// ------------------ SCHEMAS ------------------ //
+// ------------------ SCHEMAS ------------------ // 
 
 // USER
 const userSchema = new mongoose.Schema(
@@ -68,15 +68,19 @@ const Order = mongoose.model("Order", orderSchema);
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
-     description: { type: String, required: true },
+    description: { type: String, required: true },
     category: { type: String, required: true },
     price: { type: Number, required: true },
-    imageUrl: { type: String, required: true },
+
+    // FIXED — now supports multiple images
+    imageUrl: { type: [String], required: true },
+
     featured: Boolean,
     trending: Boolean,
   },
   { timestamps: true }
 );
+
 const Product = mongoose.model("Product", productSchema);
 
 // ------------------ CONNECT MDB ------------------ //
