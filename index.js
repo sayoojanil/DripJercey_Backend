@@ -4,6 +4,9 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit"; // ✅ Rate limiter added
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 app.use(express.json());
@@ -11,8 +14,7 @@ app.use(cors());
 
 const JWT_SECRET = process.env.JWT_SECRET || "local_dev_secret";
 const MONGO_URI =
-  process.env.MONGO_URI ||
-  "mongodb+srv://Payingguest:alankarvp100@cluster0.tfrej4l.mongodb.net/Payingguest?retryWrites=true&w=majority";
+  process.env.MONGO_URI ;
 const PORT = process.env.PORT || 5000;
 const runningOnVercel = process.env.VERCEL === "1";
 
