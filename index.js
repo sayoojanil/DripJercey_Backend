@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
+import bcrypt from "bcrypt";
+import rateLimit from "express-rate-limit"; // ✅ Rate limiter added
 
 const app = express();
 app.use(express.json());
@@ -14,7 +16,20 @@ const MONGO_URI =
 const PORT = process.env.PORT || 5000;
 const runningOnVercel = process.env.VERCEL === "1";
 
-// ------------------ SCHEMAS ------------------ // 
+// ------------------ RATE LIMITER ------------------ //
+
+// 5 login attempts per 15 minutes per IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    message: "Too many login attempts. Try again in 15 minutes.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ------------------ SCHEMAS ------------------ //
 
 // USER
 const userSchema = new mongoose.Schema(
@@ -48,8 +63,10 @@ const Cart = mongoose.model("Cart", cartSchema);
 
 // WISHLIST
 const wishlistSchema = new mongoose.Schema({
+  productName: String,
   userId: String,
   productId: String,
+  date: Date,
 });
 const Wishlist = mongoose.model("Wishlist", wishlistSchema);
 
@@ -71,10 +88,7 @@ const productSchema = new mongoose.Schema(
     description: { type: String, required: true },
     category: { type: String, required: true },
     price: { type: Number, required: true },
-
-    // FIXED — now supports multiple images
     imageUrl: { type: [String], required: true },
-
     featured: Boolean,
     trending: Boolean,
   },
@@ -131,7 +145,7 @@ function authMiddleware(req, res, next) {
 
 // ------------------ AUTH ROUTES ------------------ //
 
-// SIGNUP
+// SIGNUP — WITH HASHED PASSWORD
 app.post("/signup", async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -145,7 +159,9 @@ app.post("/signup", async (req, res) => {
       return res.status(400).json({ message: "Email already exists" });
     }
 
-    const user = await User.create({ name, email, password });
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await User.create({ name, email, password: hashedPassword });
 
     await Profile.create({
       userId: user._id,
@@ -167,13 +183,16 @@ app.post("/signup", async (req, res) => {
   }
 });
 
-// LOGIN
-app.post("/loginWithEmail", async (req, res) => {
+// LOGIN — NOW RATE LIMITED
+app.post("/loginWithEmail", loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email, password });
+    const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ message: "Invalid credentials" });
 
     const token = jwt.sign({ id: user._id, email }, JWT_SECRET);
 
@@ -194,7 +213,7 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
     res.json({
       ...user.toObject(),
       phone: profile?.phone || "",
-      address: profile?.address || ""
+      address: profile?.address || "",
     });
   } catch {
     res.status(500).json({ message: "Failed to fetch user" });
@@ -306,8 +325,9 @@ app.delete("/wishlist/:productId", authMiddleware, async (req, res) => {
 app.get("/orders", authMiddleware, async (req, res) => {
   try {
     const orders = await Order.find({ userId: req.user.id });
-    const profile = await Profile.findOne({ userId: req.user.id })
-      .select("name email phone address");
+    const profile = await Profile.findOne({ userId: req.user.id }).select(
+      "name email phone address"
+    );
 
     const detailedOrders = await Promise.all(
       orders.map(async (order) => {
@@ -319,7 +339,7 @@ app.get("/orders", authMiddleware, async (req, res) => {
               productName: product?.name || "",
               productPrice: product?.price || 0,
               imageUrl: product?.imageUrl || "",
-              category: product?.category || ""
+              category: product?.category || "",
             };
           })
         );
@@ -342,7 +362,6 @@ app.get("/orders", authMiddleware, async (req, res) => {
   }
 });
 
-
 app.post("/orders", authMiddleware, async (req, res) => {
   try {
     const order = await Order.create({
@@ -356,9 +375,8 @@ app.post("/orders", authMiddleware, async (req, res) => {
   }
 });
 
-// ------------------ ADMIN ORDERS (NEW) ------------------ //
+// ------------------ ADMIN ORDERS ------------------ //
 
-// get all orders for admin
 app.get("/admin/orders", async (req, res) => {
   try {
     const orders = await Order.find({});
@@ -366,8 +384,9 @@ app.get("/admin/orders", async (req, res) => {
     const detailedOrders = await Promise.all(
       orders.map(async (order) => {
         const user = await User.findById(order.userId).select("name email");
-        const profile = await Profile.findOne({ userId: order.userId })
-          .select("name email phone address");
+        const profile = await Profile.findOne({ userId: order.userId }).select(
+          "name email phone address"
+        );
 
         const detailedItems = await Promise.all(
           order.items.map(async (item) => {
@@ -407,7 +426,6 @@ app.get("/admin/orders", async (req, res) => {
   }
 });
 
-
 // ------------------ PROFILE ------------------ //
 
 app.get("/profile", authMiddleware, async (req, res) => {
@@ -436,18 +454,10 @@ app.get("/health", (req, res) => {
 
 app.get("/", (req, res) => {
   res.send(`
-    <div style="font-family: Arial; padding: 40px; text-align: center;">
-      <h1>🚀 Server is Running Successfully</h1>
-      <p>Status: <strong style="color: green;">Active</strong></p>
-      <p>MongoDB: ${
-        mongoose.connection.readyState === 1
-          ? "<span style='color: green;'>Connected</span>"
-          : "<span style='color: red;'>Disconnected</span>"
-      }</p>
-      <hr />
-      <p>API Base URL: <strong>http://localhost:5000</strong></p>
-    </div>
-  `);
+      <div style="font-family: Arial; padding: 40px; ;">
+        <p> Server is Running Successfully..</p>
+      </div>
+    `);
 });
 
 // ------------------ SERVER ------------------ //
