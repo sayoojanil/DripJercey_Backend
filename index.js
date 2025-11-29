@@ -15,7 +15,7 @@ app.use(cors());
 const JWT_SECRET = process.env.JWT_SECRET || "local_dev_secret";
 const MONGO_URI =
   process.env.MONGO_URI ;
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT ;
 const runningOnVercel = process.env.VERCEL === "1";
 
 // ------------------ RATE LIMITER ------------------ //
