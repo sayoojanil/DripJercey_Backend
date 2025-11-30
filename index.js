@@ -3,7 +3,7 @@ import cors from "cors";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
-import rateLimit from "express-rate-limit"; // ✅ Rate limiter added
+import rateLimit from "express-rate-limit"; 
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -90,6 +90,8 @@ const productSchema = new mongoose.Schema(
     description: { type: String, required: true },
     category: { type: String, required: true },
     price: { type: Number, required: true },
+    stockAvailable: { type: Number, required: true },
+    oldPrice: { type: Number, required: true },
     imageUrl: { type: [String], required: true },
     featured: Boolean,
     trending: Boolean,
@@ -192,6 +194,9 @@ app.post("/loginWithEmail", loginLimiter, async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
+
+    
+
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ message: "Invalid credentials" });
@@ -456,9 +461,7 @@ app.get("/health", (req, res) => {
 
 app.get("/", (req, res) => {
   res.send(`
-      <div style="font-family: Arial; padding: 40px; ;">
-        <p> Server is Running Successfully..</p>
-      </div>
+     dripco backend is running...
     `);
 });
 
