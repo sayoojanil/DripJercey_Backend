@@ -26,7 +26,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
-  message: { message: "Too many login attempts. Try again in 15 minutes." },
+  message: { message: "false" },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -158,7 +158,13 @@ app.post("/signup", async (req, res) => {
     const user = await User.create({ name, email, password: hashedPassword });
     await Profile.create({ userId: user._id, name, email });
 
-    const token = jwt.sign({ id: user._id, email }, JWT_SECRET);
+    
+    const token = jwt.sign(
+  { id: user._id, email },
+  JWT_SECRET,
+  { expiresIn: "7d" }
+);
+
     return res.json({ token, user: { id: user._id, name, email } });
   } catch (err) {
     if (err.code === 11000) {
@@ -198,8 +204,8 @@ app.post("/forgot-password", async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-       console.log("email send to{{email}}");
-      return res.json({ message: "Check your email for reset link (if registered)" });
+      //  console.log("email send to{{email}}");
+      return res.json({ message: "success" });
      
     }
 
@@ -223,11 +229,77 @@ app.post("/forgot-password", async (req, res) => {
       to: email,
       subject: "Password Reset - Drip Jersey",
       html: `
-        <h2>Reset Your Password</h2>
-        <p>Click here: <a href="${resetLink}">Reset Password</a></p>
-        <p>Or copy: ${resetLink}</p>
-        <p>Expires in 15 minutes.</p>
-      `,
+<!DOCTYPE html>
+<html lang="en">
+  <body style="margin:0; padding:0; background:#f4f4f7; font-family:Arial, Helvetica, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7; padding: 40px 0;">
+      <tr>
+        <td align="center">
+
+          <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.08);">
+
+            <!-- HEADER -->
+            <tr>
+              <td style="background:#000; padding:20px 40px; text-align:center;">
+                <h1 style="color:#fff; font-size:26px; margin:0; letter-spacing:1px;">Drip Jersey</h1>
+              </td>
+            </tr>
+
+            <!-- BODY -->
+            <tr>
+              <td style="padding:30px 40px; color:#333; font-size:15px; line-height:1.6;">
+                <h2 style="margin-top:0; color:#111;">Reset Your Password</h2>
+                <p>
+                  We received a request to reset your Drip Jersey password. Click the button below to continue.
+                </p>
+
+                <div style="text-align:center; margin:30px 0;">
+                  <a href="${resetLink}"
+                    style="
+                      background:#000;
+                      color:#fff;
+                      padding:14px 26px;
+                      text-decoration:none;
+                      border-radius:6px;
+                      font-weight:bold;
+                      display:inline-block;
+                    "
+                  >
+                    Reset Password
+                  </a>
+                </div>
+
+                <p>
+                  Or copy and paste the link into your browser:
+                </p>
+
+                <p style="background:#f1f1f1; padding:12px; border-radius:6px; word-wrap:break-word; font-size:13px;">
+                  ${resetLink}
+                </p>
+
+                <p style="margin-top:25px;">
+                  This reset link <strong>expires in 15 minutes</strong>.  
+                  If you did not request a password reset, you can safely ignore this email.
+                </p>
+              </td>
+            </tr>
+
+            <!-- FOOTER -->
+            <tr>
+              <td style="background:#fafafa; padding:20px 40px; text-align:center; font-size:13px; color:#777;">
+                <p style="margin:0;">© ${new Date().getFullYear()} Drip Jersey. All rights reserved.</p>
+              </td>
+            </tr>
+
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+`
+
     });
 
     console.log("Reset link (for testing):", resetLink);
