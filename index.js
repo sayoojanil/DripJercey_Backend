@@ -24,7 +24,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 // ------------------ RATE LIMITER ------------------
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 1 * 60 * 1000, // 15 minutes
   max: 5,
   message: { message: "false" },
   standardHeaders: true,
@@ -48,6 +48,13 @@ const profileSchema = new mongoose.Schema({
   email: String,
   phone: String,
   address: String,
+  AlternatePhone: String,
+  city: String,
+  Pincode: String,
+  street_area_locality: String,
+  House_flat_building: String,
+
+  
 });
 const Profile = mongoose.model("Profile", profileSchema);
 
@@ -185,14 +192,16 @@ app.post("/loginWithEmail", loginLimiter, async (req, res) => {
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(400).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign({ id: user._id, email }, JWT_SECRET);
+
+
+    const token = jwt.sign({ id: user._id, email }, JWT_SECRET , { expiresIn: "7d" });
     res.json({
       token,
       user: { id: user._id, name: user.name, email: user.email },
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
-    res.status(500).json({ message: "Login failed" });
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -351,6 +360,11 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
       ...user.toObject(),
       phone: profile?.phone || "",
       address: profile?.address || "",
+       AlternatePhone: profile?.AlternatePhone || "",
+       House_flat_building: profile?.House_flat_building || "",
+       city: profile?.city || "",
+       Pincode : profile?.Pincode || "",
+       street_area_locality: profile?.street_area_locality || "",
     });
   } catch {
     res.status(500).json({ message: "Failed to fetch user" });
