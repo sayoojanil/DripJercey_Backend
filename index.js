@@ -35,7 +35,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // Rate limiter for login
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 100,
   message: { message: "Too many login attempts, try again later" },
 });
 
@@ -331,6 +331,12 @@ app.post("/orders", authMiddleware, async (req, res) => {
   res.json(order);
 });
 
+app.get("/admin/orders", authMiddleware, async (req, res) => {
+  const orders = await Order.find().sort({ date: -1 });
+  res.json(orders);
+});
+
+
 // ================== PROFILE ==================
 app.get("/profile", authMiddleware, async (req, res) => {
   res.json(await Profile.findOne({ userId: req.user.id }));
@@ -350,14 +356,14 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send(`Drip Jersey Backend is running! Razorpay Ready`);
+  res.send(`Drip Jersey Backend is running..`);
 });
 
 // ================== START SERVER ==================
 if (!runningOnVercel) {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Webhook URL: https://your-vercel-url.vercel.app/webhook/razorpay`);
+    console.log(`Webhook URL: https://dripjerseyco.vercel.app/webhook/razorpay`);
   });
 }
 
