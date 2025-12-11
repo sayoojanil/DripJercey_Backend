@@ -147,37 +147,15 @@ function authMiddleware(req, res, next) {
 // ================== RAZORPAY: CREATE ORDER ==================
 app.post("/create-order", authMiddleware, async (req, res) => {
   try {
-    const { amount, cart } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ message: "Invalid amount" });
-    }
-
-    // Fetch profile for address
-    const profile = await Profile.findOne({ userId: req.user.id });
-
-    // Prepare address string
-    const fullAddress = `${profile?.House_flat_building || ""}, ${profile?.street_area_locality || ""}, ${profile?.city || ""}, ${profile?.Pincode || ""}`;
-
-    // Prepare product name list to show in Razorpay dashboard
-    const productNames = cart.map(item => item.name).join(", ");
-
-    // Save full cart into notes (string only)
-    const cartString = JSON.stringify(cart);
+    const { amount } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ message: "Invalid amount" });
 
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
+      amount: Math.round(amount * 100), // paise
       currency: "INR",
       receipt: `receipt_${Date.now()}`,
-
       notes: {
         userId: req.user.id.toString(),
-        user_name: profile?.name || "",
-        phone: profile?.phone || "",
-        address: fullAddress,
-
-        products: productNames,
-        cart: cartString, // Razorpay only accepts strings
       },
     });
 
@@ -186,13 +164,11 @@ app.post("/create-order", authMiddleware, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
     });
-
   } catch (error) {
     console.error("Create order error:", error);
     res.status(500).json({ message: "Failed to create order" });
   }
 });
-
 
 // ================== RAZORPAY WEBHOOK ==================
 // ================== RAZORPAY WEBHOOK (IMPROVED) ==================
