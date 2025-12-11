@@ -16,7 +16,7 @@ app.use(express.json());
 app.use(cors());
 
 // IMPORTANT: Raw body for Razorpay webhook only
-app.use("/webhook", express.raw({ type: "application/json" }));
+app.use("/webhook/razorpay", express.raw({ type: "application/json" }));
 
 const JWT_SECRET = process.env.JWT_SECRET || "local_dev_secret_2025";
 const MONGO_URI = process.env.MONGO_URI;
@@ -78,6 +78,18 @@ const Wishlist = mongoose.model("Wishlist", wishlistSchema);
 
 const orderSchema = new mongoose.Schema({
   userId: String,
+
+  userDetails: {
+    name: String,
+    phone: String,
+    address: {
+      house: String,
+      street: String,
+      city: String,
+      pincode: String,
+    },
+  },
+
   items: Array,
   total: Number,
   paymentId: String,
@@ -85,6 +97,8 @@ const orderSchema = new mongoose.Schema({
   status: { type: String, default: "paid" },
   date: { type: Date, default: Date.now },
 });
+
+
 const Order = mongoose.model("Order", orderSchema);
 
 const productSchema = new mongoose.Schema(
@@ -157,34 +171,96 @@ app.post("/create-order", authMiddleware, async (req, res) => {
 });
 
 // ================== RAZORPAY WEBHOOK ==================
-app.post("/webhook/razorpay", (req, res) => {
+// ================== RAZORPAY WEBHOOK (IMPROVED) ==================
+app.post("/webhook/razorpay", async (req, res) => {
   const secret = process.env.RAZORPAY_KEY_SECRET;
   const signature = req.headers["x-razorpay-signature"];
+
   const shasum = crypto.createHmac("sha256", secret);
   shasum.update(req.body);
   const digest = shasum.digest("hex");
 
-  if (digest === signature) {
-    const event = JSON.parse(req.body.toString());
-    if (event.event === "payment.captured") {
-      const payment = event.payload.payment.entity;
-      const userId = payment.notes.userId;
-
-      // Save order
-      Order.create({
-        userId,
-        items: payment.notes.cart ? JSON.parse(payment.notes.cart) : [],
-        total: payment.amount / 100,
-        paymentId: payment.id,
-        razorpayOrderId: payment.order_id,
-      });
-
-      // Clear cart
-      Cart.deleteMany({ userId });
-    }
+  // Verify signature
+  if (digest !== signature) {
+    console.warn("Invalid Razorpay webhook signature");
+    return res.status(400).send("Invalid signature");
   }
+
+  let event;
+  try {
+    event = JSON.parse(req.body.toString());
+  } catch (err) {
+    return res.status(400).send("Invalid payload");
+  }
+
+  if (event.event === "payment.captured") {
+    const payment = event.payload.payment.entity;
+    const userId = payment.notes?.userId;
+    const cartItemsJson = payment.notes?.cart;
+
+    if (!userId || !cartItemsJson) {
+      console.error("Missing userId or cart in payment notes");
+      return res.status(200).send("OK"); // Still acknowledge
+    }
+
+    let cartItems;
+    try {
+      cartItems = JSON.parse(cartItemsJson);
+    } catch (err) {
+      console.error("Failed to parse cart items");
+      return res.status(200).send("OK");
+    }
+
+    // Fetch product details to preserve name & price at time of purchase
+    const enrichedItems = await Promise.all(
+      cartItems.map(async (item) => {
+        const product = await Product.findById(item.productId);
+        return {
+          productId: item.productId,
+          name: product?.name || "Unknown Product",
+          price: product?.price || 0,
+          size: item.size,
+          quantity: item.quantity,
+          imageUrl: product?.imageUrl?.[0] || "",
+        };
+      })
+    );
+
+    const totalAmount = enrichedItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    const profile = await Profile.findOne({ userId });
+
+    await Order.create({
+      userId,
+      userDetails: {
+        name: profile?.name || "",
+        phone: profile?.phone || "",
+        address: {
+          house: profile?.House_flat_building || "",
+          street: profile?.street_area_locality || "",
+          city: profile?.city || "",
+          pincode: profile?.Pincode || "",
+        },
+      },
+      items: enrichedItems,
+      total: totalAmount,
+      paymentId: payment.id,
+      razorpayOrderId: payment.order_id,
+      status: "Paid",
+      date: new Date(),
+    });
+
+    // Clear user's cart after successful payment
+    await Cart.deleteMany({ userId });
+  }
+
   res.status(200).send("OK");
 });
+
+
 
 // ================== AUTH ROUTES ==================
 app.post("/signup", async (req, res) => {
@@ -326,10 +402,62 @@ app.get("/orders", authMiddleware, async (req, res) => {
 });
 
 app.post("/orders", authMiddleware, async (req, res) => {
-  const { items, total } = req.body;
-  const order = await Order.create({ userId: req.user.id, items, total });
-  res.json(order);
+  try {
+    const { items } = req.body;
+
+    const userId = req.user.id;
+
+    // Enrich items with product name & current price
+    const enrichedItems = await Promise.all(
+      items.map(async (item) => {
+        const product = await Product.findById(item.productId);
+        return {
+          productId: item.productId,
+          name: product?.name || "Unknown Product",
+          price: product?.price || 0,
+          size: item.size || "",
+          quantity: item.quantity || 1,
+          imageUrl: product?.imageUrl?.[0] || "",
+        };
+      })
+    );
+
+    const total = enrichedItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    const profile = await Profile.findOne({ userId });
+
+    const order = await Order.create({
+      userId,
+      userDetails: {
+        name: profile?.name || "",
+        phone: profile?.phone || "",
+        address: {
+          house: profile?.House_flat_building || "",
+          street: profile?.street_area_locality || "",
+          city: profile?.city || "",
+          pincode: profile?.Pincode || "",
+        },
+      },
+      items: enrichedItems,
+      total,
+      status: "Paid",
+      date: new Date(),
+    });
+
+    // Optional: clear cart
+    await Cart.deleteMany({ userId });
+
+    res.json(order);
+  } catch (error) {
+    console.error("Manual order creation failed:", error);
+    res.status(500).json({ message: "Failed to create order" });
+  }
 });
+
+
 
 app.get("/admin/orders", authMiddleware, async (req, res) => {
   const orders = await Order.find().sort({ date: -1 });
@@ -368,3 +496,13 @@ if (!runningOnVercel) {
 }
 
 export default app;
+
+
+
+
+
+
+
+
+
+
