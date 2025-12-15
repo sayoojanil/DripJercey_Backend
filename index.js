@@ -92,11 +92,32 @@ const orderSchema = new mongoose.Schema({
 
   items: Array,
   total: Number,
+
   paymentId: String,
   razorpayOrderId: String,
-  status: { type: String, default: "paid" },
+
+  paymentStatus: {
+    type: String,
+    enum: ["Paid", "COD"],
+    required: true,
+  },
+
+  deliveryStatus: {
+    type: String,
+    enum: [
+      "Placed",
+      "Confirmed",
+      "Shipped",
+      "Out for Delivery",
+      "Delivered",
+      "Cancelled"
+    ],
+    default: "Placed",
+  },
+
   date: { type: Date, default: Date.now },
 });
+
 
 
 const Order = mongoose.model("Order", orderSchema);
@@ -234,24 +255,26 @@ app.post("/webhook/razorpay", async (req, res) => {
     const profile = await Profile.findOne({ userId });
 
     await Order.create({
-      userId,
-      userDetails: {
-        name: profile?.name || "",
-        phone: profile?.phone || "",
-        address: {
-          house: profile?.House_flat_building || "",
-          street: profile?.street_area_locality || "",
-          city: profile?.city || "",
-          pincode: profile?.Pincode || "",
-        },
-      },
-      items: enrichedItems,
-      total: totalAmount,
-      paymentId: payment.id,
-      razorpayOrderId: payment.order_id,
-      status: "Paid",
-      date: new Date(),
-    });
+  userId,
+  userDetails: {
+    name: profile?.name || "",
+    phone: profile?.phone || "",
+    address: {
+      house: profile?.House_flat_building || "",
+      street: profile?.street_area_locality || "",
+      city: profile?.city || "",
+      pincode: profile?.Pincode || "",
+    },
+  },
+  items: enrichedItems,
+  total: totalAmount,
+  paymentId: payment.id,
+  razorpayOrderId: payment.order_id,
+  paymentStatus: "Paid",
+  deliveryStatus: "Placed",
+  date: new Date(),
+});
+
 
     // Clear user's cart after successful payment
     await Cart.deleteMany({ userId });
@@ -282,6 +305,37 @@ app.post("/signup", async (req, res) => {
     res.status(500).json({ message: "Signup failed" });
   }
 });
+
+
+app.patch("/admin/orders/:id/delivery-status", authMiddleware, async (req, res) => {
+  const { deliveryStatus } = req.body;
+
+  const allowed = [
+    "Placed",
+    "Confirmed",
+    "Shipped",
+    "Out for Delivery",
+    "Delivered",
+    "Cancelled",
+  ];
+
+  if (!allowed.includes(deliveryStatus)) {
+    return res.status(400).json({ message: "Invalid delivery status" });
+  }
+
+  const order = await Order.findByIdAndUpdate(
+    req.params.id,
+    { deliveryStatus },
+    { new: true }
+  );
+
+  if (!order) {
+    return res.status(404).json({ message: "Order not found" });
+  }
+
+  res.json(order);
+});
+
 
 app.post("/loginWithEmail", loginLimiter, async (req, res) => {
   try {
@@ -335,6 +389,7 @@ app.post("/products", async (req, res) => {
     const saved = await Product.create(req.body);
     res.json(saved);
   } catch (e) {
+    console.error("PRODUCT SAVE ERROR:", e);
     res.status(500).json({ message: "Product save failed" });
   }
 });
@@ -356,6 +411,40 @@ app.get("/products", async (req, res) => {
     res.status(500).json({ message: "Failed to fetch products" });
   }
 });
+
+app.put("/products/:id", async (req, res) => {
+  try {
+    const updated = await Product.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    res.json({ message: "Product updated", product: updated });
+  } catch (err) {
+    res.status(500).json({ message: "Error updating product", error: err });
+  }
+});
+
+
+app.delete("/products/:id", async (req, res) => {
+  try {
+    const removed = await Product.findByIdAndDelete(req.params.id);
+
+    if (!removed) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    res.json({ message: "Product deleted" });
+  } catch (err) {
+    res.status(500).json({ message: "Error deleting product", error: err });
+  }
+});
+
 
 app.get("/products/featured", async (req, res) => res.json(await Product.find({ featured: true })));
 app.get("/products/trending", async (req, res) => res.json(await Product.find({ trending: true })));
@@ -429,23 +518,25 @@ app.post("/orders", authMiddleware, async (req, res) => {
 
     const profile = await Profile.findOne({ userId });
 
-    const order = await Order.create({
-      userId,
-      userDetails: {
-        name: profile?.name || "",
-        phone: profile?.phone || "",
-        address: {
-          house: profile?.House_flat_building || "",
-          street: profile?.street_area_locality || "",
-          city: profile?.city || "",
-          pincode: profile?.Pincode || "",
-        },
-      },
-      items: enrichedItems,
-      total,
-      status: "Paid",
-      date: new Date(),
-    });
+   const order = await Order.create({
+  userId,
+  userDetails: {
+    name: profile?.name || "",
+    phone: profile?.phone || "",
+    address: {
+      house: profile?.House_flat_building || "",
+      street: profile?.street_area_locality || "",
+      city: profile?.city || "",
+      pincode: profile?.Pincode || "",
+    },
+  },
+  items: enrichedItems,
+  total,
+  paymentStatus: "COD",
+  deliveryStatus: "Placed",
+  date: new Date(),
+});
+
 
     // Optional: clear cart
     await Cart.deleteMany({ userId });
