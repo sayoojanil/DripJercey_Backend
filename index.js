@@ -127,6 +127,7 @@ const productSchema = new mongoose.Schema(
     name: { type: String, required: true },
     description: { type: String, required: true },
     category: { type: String, required: true },
+    
     price: { type: Number, required: true },
     stockAvailable: { type: Number, required: true },
     oldPrice: { type: Number, required: true },
@@ -396,21 +397,48 @@ app.post("/products", async (req, res) => {
 
 app.get("/products", async (req, res) => {
   try {
-    const { category, minPrice, maxPrice, sort } = req.query;
+    const {
+      category,
+      minPrice,
+      maxPrice,
+      sort,
+      page = 1,
+      limit = 4,
+    } = req.query;
+
     const filter = {};
+
     if (category) filter.category = category;
-    if (minPrice) filter.price = { ...filter.price, $gte: Number(minPrice) };
-    if (maxPrice) filter.price = { ...filter.price, $lte: Number(maxPrice) };
+    if (minPrice || maxPrice) {
+      filter.price = {};
+      if (minPrice) filter.price.$gte = Number(minPrice);
+      if (maxPrice) filter.price.$lte = Number(maxPrice);
+    }
 
     let query = Product.find(filter);
+
     if (sort === "asc") query = query.sort({ price: 1 });
     if (sort === "desc") query = query.sort({ price: -1 });
 
-    res.json(await query.exec());
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const [products, total] = await Promise.all([
+      query.skip(skip).limit(Number(limit)).exec(),
+      Product.countDocuments(filter),
+    ]);
+
+    res.json({
+      products,
+      total,
+      page: Number(page),
+      totalPages: Math.ceil(total / Number(limit)),
+    });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Failed to fetch products" });
   }
 });
+
 
 app.put("/products/:id", async (req, res) => {
   try {
