@@ -1,4 +1,4 @@
-import express from "express";
+import express, { response } from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
@@ -13,6 +13,8 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.set("json spaces", 2);
+
 app.use(cors());
 
 // IMPORTANT: Raw body for Razorpay webhook only
@@ -293,7 +295,7 @@ app.post("/signup", async (req, res) => {
     if (!email || !password || !name) return res.status(400).json({ message: "Missing fields" });
 
     const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({ message: "Email already exists" });
+    if (existing) return res.status(400).json({success:false , statusCode:"400",   message: "Email already exists",});
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ name, email, password: hashedPassword });
@@ -303,7 +305,7 @@ app.post("/signup", async (req, res) => {
     res.json({ token, user: { id: user._id, name, email } });
   } catch (err) {
     console.error("SIGNUP ERROR:", err);
-    res.status(500).json({ message: "Signup failed" });
+    res.status(500).json({ message: "Signup failed",success:false,statusCode:"500" });
   }
 });
 
@@ -345,10 +347,10 @@ app.post("/loginWithEmail", loginLimiter, async (req, res) => {
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(400).json({ message: "Invalid credentials" });
+    if (!match) return res.status(400).json({success:false,status:400,isVerified:false, message: "Invalid credentials" });
 
     const token = jwt.sign({ id: user._id, email }, JWT_SECRET);
-    res.json({ token, user: { id: user._id, name: user.name, email: user.email } });
+    res.json({ token, isVerified:true,success:true,statusCode:200,Role:"Customer",message:"Login succesfull",timeStamp:new Date(),user: { id: user._id, name: user.name, email: user.email } });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ message: "Server error" });
@@ -368,21 +370,37 @@ app.post("/reset-password/:token", async (req, res) => {
 app.get("/auth/me", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("name email");
+    if (!user) {
+      return res.status(401).json({ isUser: false });
+    }
+
     const profile = await Profile.findOne({ userId: req.user.id });
+
     res.json({
-      ...user.toObject(),
+    status:{
+
+      isUser: true,
+      isVerified: true,
+      StatusCode: 200,
+      
+
+    },
+      isUser: true,   // 👈 THIS is what you asked for
+      id: user._id,
+      name: user.name,
+      email: user.email,
       phone: profile?.phone || "",
-      address: profile?.address || "",
       AlternatePhone: profile?.AlternatePhone || "",
       House_flat_building: profile?.House_flat_building || "",
       city: profile?.city || "",
       Pincode: profile?.Pincode || "",
       street_area_locality: profile?.street_area_locality || "",
     });
-  } catch {
-    res.status(500).json({ message: "Failed to fetch user" });
+  } catch (err) {
+    res.status(401).json({ isUser: false });
   }
 });
+
 
 // ================== PRODUCTS ==================
 app.post("/products", async (req, res) => {
@@ -403,7 +421,7 @@ app.get("/products", async (req, res) => {
       maxPrice,
       sort,
       page = 1,
-      limit = 4,
+      limit = 8,
     } = req.query;
 
     const filter = {};
@@ -517,6 +535,35 @@ app.get("/orders", authMiddleware, async (req, res) => {
   const orders = await Order.find({ userId: req.user.id }).sort({ date: -1 });
   res.json(orders);
 });
+
+// ================== USER CANCEL ORDER ==================
+app.patch("/orders/:id/cancel", authMiddleware, async (req, res) => {
+  try {
+    const order = await Order.findOne({
+      _id: req.params.id,
+      userId: req.user.id,
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (order.deliveryStatus !== "Placed") {
+      return res.status(400).json({
+        message: "Order cannot be cancelled after confirmation",
+      });
+    }
+
+    order.deliveryStatus = "Cancelled";
+    await order.save();
+
+    res.json({ message: "Order cancelled successfully", order });
+  } catch (error) {
+    console.error("Cancel order error:", error);
+    res.status(500).json({ message: "Failed to cancel order" });
+  }
+});
+
 
 app.post("/orders", authMiddleware, async (req, res) => {
   try {
