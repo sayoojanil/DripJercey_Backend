@@ -129,6 +129,7 @@ const productSchema = new mongoose.Schema(
     name: { type: String, required: true },
     description: { type: String, required: true },
     category: { type: String, required: true },
+    material: { type: String, required: true },
     
     price: { type: Number, required: true },
     stockAvailable: { type: Number, required: true },
@@ -140,6 +141,8 @@ const productSchema = new mongoose.Schema(
   { timestamps: true }
 );
 const Product = mongoose.model("Product", productSchema);
+
+
 
 // ================== DATABASE CONNECTION ==================
 let cachedConnection = null;
@@ -421,7 +424,7 @@ app.get("/products", async (req, res) => {
       maxPrice,
       sort,
       page = 1,
-      limit = 8,
+      limit = 100,
     } = req.query;
 
     const filter = {};
