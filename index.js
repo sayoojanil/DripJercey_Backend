@@ -197,16 +197,40 @@ const Product = mongoose.model("Product", productSchema);
 // ================== DATABASE CONNECTION ==================
 let cachedConnection = null;
 async function connectDB() {
-  if (cachedConnection) return cachedConnection;
+  if (cachedConnection && mongoose.connection.readyState === 1) return cachedConnection;
+  
   if (!MONGO_URI) {
-    console.error("MONGO_URI not set");
-    process.exit(1);
+    console.error("MONGO_URI not set. Please check your environment variables.");
+    return null;
   }
-  cachedConnection = await mongoose.connect(MONGO_URI);
-  console.log("MongoDB connected");
-  return cachedConnection;
+
+  try {
+    cachedConnection = await mongoose.connect(MONGO_URI);
+    console.log("MongoDB connected successfully");
+    return cachedConnection;
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+    cachedConnection = null;
+    return null;
+  }
 }
-connectDB().catch(err => console.error("DB Error:", err));
+
+// Initial connection attempt
+connectDB();
+
+// Middleware to ensure DB is connected for every request
+app.use(async (req, res, next) => {
+  if (req.path === "/health" || req.path === "/") return next();
+  
+  const conn = await connectDB();
+  if (!conn) {
+    return res.status(503).json({ 
+      message: "Database connection unavailable. Please try again later.",
+      error: process.env.NODE_ENV === "development" ? "Check server logs for details" : undefined
+    });
+  }
+  next();
+});
 
 // ================== AUTH MIDDLEWARE ==================
 function authMiddleware(req, res, next) {
