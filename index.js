@@ -1,8 +1,8 @@
-import express, { response } from "express";
+import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import { Resend } from "resend";
