@@ -12,25 +12,30 @@ import crypto from "crypto";
 dotenv.config();
 
 const app = express();
-app.use(express.json());
-app.set("json spaces", 2);
-
 app.use(cors());
 
-// IMPORTANT: Raw body for Razorpay webhook only
+// IMPORTANT: Raw body for Razorpay webhook must be BEFORE express.json()
 app.use("/webhook/razorpay", express.raw({ type: "application/json" }));
+app.use(express.json());
+app.set("json spaces", 2);
 
 const JWT_SECRET = process.env.JWT_SECRET || "local_dev_secret_2025";
 const MONGO_URI = process.env.MONGO_URI;
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL ;
+const CLIENT_URL = process.env.CLIENT_URL;
 const runningOnVercel = process.env.VERCEL === "1";
 
 // Razorpay
+console.log("Razorpay Key ID:", process.env.RAZORPAY_KEY_ID ? `${process.env.RAZORPAY_KEY_ID.substring(0, 8)}...` : "MISSING");
+console.log("Razorpay Secret:", process.env.RAZORPAY_KEY_SECRET ? "LOADED" : "MISSING");
+
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
+  key_id: process.env.RAZORPAY_KEY_ID?.trim(),
+  key_secret: process.env.RAZORPAY_KEY_SECRET?.trim(),
 });
+
+console.log("Final Razorpay Key ID used:", razorpay.key_id ? `${razorpay.key_id.substring(0, 8)}...` : "NONE");
+console.log("Final Razorpay Secret status:", razorpay.key_secret ? "TRIMMED & LOADED" : "NONE");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -53,12 +58,18 @@ const profileSchema = new mongoose.Schema({
   name: String,
   email: String,
   phone: String,
+  phoneCode: String,
   address: String,
   AlternatePhone: String,
+  alternatePhoneCode: String,
   city: String,
   Pincode: String,
   street_area_locality: String,
   House_flat_building: String,
+  landmark: String,
+  district: String,
+  state: String,
+  country: String,
 });
 const Profile = mongoose.model("Profile", profileSchema);
 
@@ -84,11 +95,18 @@ const orderSchema = new mongoose.Schema({
   userDetails: {
     name: String,
     phone: String,
+    phoneCode: String,
+    alternatePhone: String,
+    alternatePhoneCode: String,
     address: {
       house: String,
       street: String,
+      landmark: String,
       city: String,
+      district: String,
+      state: String,
       pincode: String,
+      country: String,
     },
   },
 
@@ -100,7 +118,7 @@ const orderSchema = new mongoose.Schema({
 
   paymentStatus: {
     type: String,
-    enum: ["Paid", "COD"],
+    enum: ["Paid"],
     required: true,
   },
 
@@ -130,11 +148,43 @@ const productSchema = new mongoose.Schema(
     description: { type: String, required: true },
     category: { type: String, required: true },
     material: { type: String, required: true },
-    
+
     price: { type: Number, required: true },
     stockAvailable: { type: Number, required: true },
     oldPrice: { type: Number, required: true },
     imageUrl: { type: [String], required: true },
+    
+    // Identity & Highlights
+    productCode: { type: String, default: "" },
+    region: { type: String, default: "" },
+    tagline: { type: String, default: "Real Curry. No Chopping." },
+    dietaryTags: { type: [String], default: [] },
+    
+    // Content & Story
+    originStory: { type: String, default: "" },
+    ingredients: { type: String, default: "" }, // Keep legacy for compatibility
+    pouchContents: [{
+      name: String,
+      weight: String,
+      note: String
+    }],
+    
+    // Stats
+    stats: {
+      serves: { type: String, default: "" },
+      prep: { type: String, default: "" },
+      cook: { type: String, default: "" },
+      protein: { type: String, default: "" },
+    },
+    
+    // Cooking
+    howToCook: { type: String, default: "" }, // Keep legacy for compatibility
+    cookingSteps: { type: [String], default: [] },
+    customerAdds: { type: String, default: "" },
+
+    // Standard fields
+    weight: { type: String, default: "" },
+    serves: { type: String, default: "" }, // Keep legacy
     featured: Boolean,
     trending: Boolean,
   },
@@ -171,10 +221,50 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// ================== ADMIN MIDDLEWARE ==================
+const ADMIN_USER = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASS = process.env.ADMIN_PASSWORD || "admin123";
+
+function adminMiddleware(req, res, next) {
+  const adminToken = req.headers["admin-token"];
+  if (!adminToken || adminToken !== process.env.JWT_SECRET + "_admin") {
+    return res.status(403).json({ message: "Admin access denied" });
+  }
+  next();
+}
+
+app.post("/admin/login", (req, res) => {
+  const { username, password } = req.body;
+  if (username === ADMIN_USER && password === ADMIN_PASS) {
+    return res.json({ adminToken: process.env.JWT_SECRET + "_admin", success: true });
+  }
+  res.status(401).json({ message: "Invalid admin credentials", success: false });
+});
+
+app.get("/admin/users", adminMiddleware, async (req, res) => {
+  try {
+    const users = await User.find().select("-password").sort({ createdAt: -1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching users" });
+  }
+});
+
+app.delete("/admin/users/:id", adminMiddleware, async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    await Profile.deleteOne({ userId: req.params.id });
+    res.json({ message: "User deleted" });
+  } catch (err) {
+    res.status(500).json({ message: "Error deleting user" });
+  }
+});
+
+
 // ================== RAZORPAY: CREATE ORDER ==================
 app.post("/create-order", authMiddleware, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, cart } = req.body;
     if (!amount || amount <= 0) return res.status(400).json({ message: "Invalid amount" });
 
     const order = await razorpay.orders.create({
@@ -183,6 +273,8 @@ app.post("/create-order", authMiddleware, async (req, res) => {
       receipt: `receipt_${Date.now()}`,
       notes: {
         userId: req.user.id.toString(),
+        // Store truncated cart for webhook fallback (max 255 chars in Razorpay notes)
+        cart: JSON.stringify(cart).substring(0, 255),
       },
     });
 
@@ -200,7 +292,8 @@ app.post("/create-order", authMiddleware, async (req, res) => {
 // ================== RAZORPAY WEBHOOK ==================
 // ================== RAZORPAY WEBHOOK (IMPROVED) ==================
 app.post("/webhook/razorpay", async (req, res) => {
-  const secret = process.env.RAZORPAY_KEY_SECRET;
+  // Use RAZORPAY_WEBHOOK_SECRET or fallback to RAZORPAY_KEY_SECRET for signature verification
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
   const signature = req.headers["x-razorpay-signature"];
 
   const shasum = crypto.createHmac("sha256", secret);
@@ -253,33 +346,53 @@ app.post("/webhook/razorpay", async (req, res) => {
       })
     );
 
-    const totalAmount = enrichedItems.reduce(
+    const subtotal = enrichedItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
+    const shipping = subtotal >= 599 ? 0 : 49;
+    const totalAmount = subtotal + shipping;
 
     const profile = await Profile.findOne({ userId });
 
+    // Check for existing order with same razorpayOrderId to avoid duplicates
+    const existingOrder = await Order.findOne({ razorpayOrderId: payment.order_id });
+    if (existingOrder) {
+      if (existingOrder.paymentStatus !== "Paid") {
+        existingOrder.paymentStatus = "Paid";
+        existingOrder.paymentId = payment.id;
+        await existingOrder.save();
+      }
+      return res.status(200).send("OK");
+    }
+
     await Order.create({
-  userId,
-  userDetails: {
-    name: profile?.name || "",
-    phone: profile?.phone || "",
-    address: {
-      house: profile?.House_flat_building || "",
-      street: profile?.street_area_locality || "",
-      city: profile?.city || "",
-      pincode: profile?.Pincode || "",
-    },
-  },
-  items: enrichedItems,
-  total: totalAmount,
-  paymentId: payment.id,
-  razorpayOrderId: payment.order_id,
-  paymentStatus: "Paid",
-  deliveryStatus: "Placed",
-  date: new Date(),
-});
+      userId,
+      userDetails: {
+        name: profile?.name || "",
+        phone: profile?.phone || "",
+        phoneCode: profile?.phoneCode || "+91",
+        alternatePhone: profile?.AlternatePhone || "",
+        alternatePhoneCode: profile?.alternatePhoneCode || "+91",
+        address: {
+          house: profile?.House_flat_building || "",
+          street: profile?.street_area_locality || "",
+          landmark: profile?.landmark || "",
+          city: profile?.city || "",
+          district: profile?.district || "",
+          state: profile?.state || "",
+          pincode: profile?.Pincode || "",
+          country: profile?.country || "India",
+        },
+      },
+      items: enrichedItems,
+      total: totalAmount,
+      paymentId: payment.id,
+      razorpayOrderId: payment.order_id,
+      paymentStatus: "Paid",
+      deliveryStatus: "Placed",
+      date: new Date(),
+    });
 
 
     // Clear user's cart after successful payment
@@ -298,22 +411,43 @@ app.post("/signup", async (req, res) => {
     if (!email || !password || !name) return res.status(400).json({ message: "Missing fields" });
 
     const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({success:false , statusCode:"400",   message: "Email already exists",});
+    if (existing) return res.status(400).json({ success: false, statusCode: "400", message: "Email already exists", });
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ name, email, password: hashedPassword });
-    await Profile.create({ userId: user._id, name, email });
+    const profile = await Profile.create({ userId: user._id, name, email });
 
     const token = jwt.sign({ id: user._id, email }, JWT_SECRET, { expiresIn: "7d" });
-    res.json({ token, user: { id: user._id, name, email } });
+    
+    res.json({ 
+      token, 
+      user: { 
+        id: user._id, 
+        name, 
+        email,
+        phone: profile.phone || "",
+        phoneCode: profile.phoneCode || "+91",
+        AlternatePhone: profile.AlternatePhone || "",
+        alternatePhoneCode: profile.alternatePhoneCode || "+91",
+        address: profile.address || "",
+        House_flat_building: profile.House_flat_building || "",
+        city: profile.city || "",
+        Pincode: profile.Pincode || "",
+        street_area_locality: profile.street_area_locality || "",
+        landmark: profile.landmark || "",
+        district: profile.district || "",
+        state: profile.state || "",
+        country: profile.country || "India",
+      } 
+    });
   } catch (err) {
     console.error("SIGNUP ERROR:", err);
-    res.status(500).json({ message: "Signup failed",success:false,statusCode:"500" });
+    res.status(500).json({ message: "Signup failed", success: false, statusCode: "500" });
   }
 });
 
 
-app.patch("/admin/orders/:id/delivery-status", authMiddleware, async (req, res) => {
+app.patch("/admin/orders/:id/delivery-status", adminMiddleware, async (req, res) => {
   const { deliveryStatus } = req.body;
 
   const allowed = [
@@ -350,10 +484,38 @@ app.post("/loginWithEmail", loginLimiter, async (req, res) => {
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(400).json({success:false,status:400,isVerified:false, message: "Invalid credentials" });
+    if (!match) return res.status(400).json({ success: false, status: 400, isVerified: false, message: "Invalid credentials" });
 
     const token = jwt.sign({ id: user._id, email }, JWT_SECRET);
-    res.json({ token, isVerified:true,success:true,statusCode:200,Role:"Customer",message:"Login succesfull",timeStamp:new Date(),user: { id: user._id, name: user.name, email: user.email } });
+    const profile = await Profile.findOne({ userId: user._id });
+
+    res.json({ 
+      token, 
+      isVerified: true, 
+      success: true, 
+      statusCode: 200, 
+      Role: "Customer", 
+      message: "Login succesfull", 
+      timeStamp: new Date(), 
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email,
+        address: profile?.address || "",
+        phone: profile?.phone || "",
+        phoneCode: profile?.phoneCode || "+91",
+        AlternatePhone: profile?.AlternatePhone || "",
+        alternatePhoneCode: profile?.alternatePhoneCode || "+91",
+        House_flat_building: profile?.House_flat_building || "",
+        city: profile?.city || "",
+        Pincode: profile?.Pincode || "",
+        street_area_locality: profile?.street_area_locality || "",
+        landmark: profile?.landmark || "",
+        district: profile?.district || "",
+        state: profile?.state || "",
+        country: profile?.country || "India",
+      } 
+    });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ message: "Server error" });
@@ -380,24 +542,31 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
     const profile = await Profile.findOne({ userId: req.user.id });
 
     res.json({
-    status:{
+      status: {
 
-      isUser: true,
-      isVerified: true,
-      StatusCode: 200,
-      
+        isUser: true,
+        isVerified: true,
+        StatusCode: 200,
 
-    },
+
+      },
       isUser: true,   // 👈 THIS is what you asked for
       id: user._id,
       name: user.name,
       email: user.email,
+      address: profile?.address || "",
       phone: profile?.phone || "",
+      phoneCode: profile?.phoneCode || "+91",
       AlternatePhone: profile?.AlternatePhone || "",
+      alternatePhoneCode: profile?.alternatePhoneCode || "+91",
       House_flat_building: profile?.House_flat_building || "",
       city: profile?.city || "",
       Pincode: profile?.Pincode || "",
       street_area_locality: profile?.street_area_locality || "",
+      landmark: profile?.landmark || "",
+      district: profile?.district || "",
+      state: profile?.state || "",
+      country: profile?.country || "India",
     });
   } catch (err) {
     res.status(401).json({ isUser: false });
@@ -406,7 +575,7 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
 
 
 // ================== PRODUCTS ==================
-app.post("/products", async (req, res) => {
+app.post("/products", adminMiddleware, async (req, res) => {
   try {
     const saved = await Product.create(req.body);
     res.json(saved);
@@ -461,7 +630,7 @@ app.get("/products", async (req, res) => {
 });
 
 
-app.put("/products/:id", async (req, res) => {
+app.put("/products/:id", adminMiddleware, async (req, res) => {
   try {
     const updated = await Product.findByIdAndUpdate(
       req.params.id,
@@ -480,7 +649,7 @@ app.put("/products/:id", async (req, res) => {
 });
 
 
-app.delete("/products/:id", async (req, res) => {
+app.delete("/products/:id", adminMiddleware, async (req, res) => {
   try {
     const removed = await Product.findByIdAndDelete(req.params.id);
 
@@ -570,8 +739,7 @@ app.patch("/orders/:id/cancel", authMiddleware, async (req, res) => {
 
 app.post("/orders", authMiddleware, async (req, res) => {
   try {
-    const { items } = req.body;
-
+    const { items, totalAmount, paymentId, razorpayOrderId, status, shippingAddress } = req.body;
     const userId = req.user.id;
 
     // Enrich items with product name & current price
@@ -589,46 +757,67 @@ app.post("/orders", authMiddleware, async (req, res) => {
       })
     );
 
-    const total = enrichedItems.reduce(
+    const total = totalAmount || enrichedItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
 
     const profile = await Profile.findOne({ userId });
 
-   const order = await Order.create({
-  userId,
-  userDetails: {
-    name: profile?.name || "",
-    phone: profile?.phone || "",
-    address: {
-      house: profile?.House_flat_building || "",
-      street: profile?.street_area_locality || "",
-      city: profile?.city || "",
-      pincode: profile?.Pincode || "",
-    },
-  },
-  items: enrichedItems,
-  total,
-  paymentStatus: "COD",
-  deliveryStatus: "Placed",
-  date: new Date(),
-});
+    // Check if order already exists (possibly created by webhook)
+    if (razorpayOrderId) {
+      const existing = await Order.findOne({ razorpayOrderId });
+      if (existing) {
+        if (status === "Paid" && existing.paymentStatus !== "Paid") {
+          existing.paymentStatus = "Paid";
+          existing.paymentId = paymentId;
+          await existing.save();
+        }
+        return res.json(existing);
+      }
+    }
 
+    const order = await Order.create({
+      userId,
+      userDetails: {
+        name: profile?.name || req.user.name || "",
+        phone: shippingAddress?.phone || profile?.phone || "",
+        phoneCode: shippingAddress?.phoneCode || profile?.phoneCode || "+91",
+        alternatePhone: shippingAddress?.alternatePhone || profile?.AlternatePhone || "",
+        alternatePhoneCode: shippingAddress?.alternatePhoneCode || profile?.alternatePhoneCode || "+91",
+        address: {
+          house: shippingAddress?.house || profile?.House_flat_building || "",
+          street: shippingAddress?.street || profile?.street_area_locality || "",
+          landmark: shippingAddress?.landmark || profile?.landmark || "",
+          city: shippingAddress?.city || profile?.city || "",
+          district: shippingAddress?.district || profile?.district || "",
+          state: shippingAddress?.state || profile?.state || "",
+          pincode: shippingAddress?.pincode || profile?.Pincode || "",
+          country: shippingAddress?.country || profile?.country || "India",
+        },
+      },
+      items: enrichedItems,
+      total,
+      paymentId: paymentId || null,
+      razorpayOrderId: razorpayOrderId || null,
+      paymentStatus: "Paid",
+      deliveryStatus: "Placed",
+      date: new Date(),
+    });
 
-    // Optional: clear cart
+    // Clear cart after order
     await Cart.deleteMany({ userId });
 
     res.json(order);
   } catch (error) {
-    console.error("Manual order creation failed:", error);
+    console.error("Order creation failed:", error);
     res.status(500).json({ message: "Failed to create order" });
   }
 });
 
 
 
-app.get("/admin/orders", authMiddleware, async (req, res) => {
+app.get("/admin/orders", adminMiddleware, async (req, res) => {
   const orders = await Order.find().sort({ date: -1 });
   res.json(orders);
 });
@@ -639,12 +828,35 @@ app.get("/profile", authMiddleware, async (req, res) => {
   res.json(await Profile.findOne({ userId: req.user.id }));
 });
 app.put("/profile", authMiddleware, async (req, res) => {
-  const updated = await Profile.findOneAndUpdate(
-    { userId: req.user.id },
-    req.body,
-    { new: true }
-  );
-  res.json(updated);
+  try {
+    const { userId, ...updateData } = req.body; // Remove userId from body to prevent overwrite
+    
+    console.log("Saving Profile for user:", req.user.id, updateData);
+
+    // Update User model name if provided
+    if (updateData.name) {
+      await User.findByIdAndUpdate(req.user.id, { name: updateData.name });
+    }
+
+    const updated = await Profile.findOneAndUpdate(
+      { userId: req.user.id },
+      { ...updateData },
+      { new: true, upsert: true }
+    );
+
+    // Fetch fresh user data to return
+    const user = await User.findById(req.user.id).select("name email");
+    
+    res.json({
+      ...updated.toObject(), // Spread all profile fields
+      id: user._id,          // Ensure id, name, and email are correct
+      name: user.name,
+      email: user.email,
+    });
+  } catch (error) {
+    console.error("Profile update error:", error);
+    res.status(500).json({ message: "Failed to update profile" });
+  }
 });
 
 // ================== HEALTH & ROOT ==================
@@ -653,14 +865,14 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send(`Drip Jersey Backend is running..`);
+  res.send(`Pocket chef Backend is running..`);
 });
 
 // ================== START SERVER ==================
 if (!runningOnVercel) {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Webhook URL: https://dripjerseyco.vercel.app/webhook/razorpay`);
+    console.log(`Webhook URL: https://foodiesdelight.vercel.app/webhook/razorpay`);
   });
 }
 
